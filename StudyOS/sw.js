@@ -10,7 +10,7 @@
 
    Bump CACHE when you ship changes; the old cache is dropped on activate.
    ============================================================ */
-const CACHE = "studyos-v2";
+const CACHE = "studyos-v3";
 
 const SHELL = [
   "./",

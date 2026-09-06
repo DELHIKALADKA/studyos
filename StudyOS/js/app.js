@@ -41,8 +41,8 @@
   const PAGES = {
     dashboard:    () => PagesCore.dashboard(),
     subjects:     () => PagesCore.subjects(),
-    subject:      () => PagesCore.subjectDetail(),
-    chapter:      () => PagesCore.chapter(),
+    subject:      () => PagesCore.subjects(),
+    chapter:      () => PagesCore.subjects(),
     homework:     () => PagesCore.homework(),
     exams:        () => PagesCore.exams(),
     timer:        () => PagesStudy.timer(),
@@ -101,7 +101,11 @@
     // ---------- navigation ----------
     go(page, extra) {
       PagesStudy.stopTimerIfRunning && PagesStudy.stopTimerIfRunning(page);
-      App.route = Object.assign({ page }, extra || {});
+      const e = Object.assign({}, extra || {});
+      // Normalise route keys: pages read subjectId / chapterId.
+      if (e.sid && e.subjectId == null) e.subjectId = e.sid;
+      if (e.cid && e.chapterId == null) e.chapterId = e.cid;
+      App.route = Object.assign({ page }, e);
       window.scrollTo({ top: 0 });
       App.render();
     },
@@ -232,9 +236,10 @@
         // -------- subjects & chapters --------
         if (e.target.closest("[data-add-subject]")) return App.modalSubject();
         if ((v = t("data-open-subject")) !== null) return App.go("subject", { sid: v });
-        if ((v = t("data-edit-subject")) !== null) return App.modalSubject(v);
+        if ((v = t("data-edit-subject")) !== null || (v = t("data-rename-subject")) !== null) return App.modalSubject(v);
         if ((v = t("data-del-subject")) !== null) {
           const s = Store.findSubject(v);
+          if (!s) return App.render();
           return UI.confirm("Delete subject?", `<b>${U.esc(s.name)}</b> and its ${s.chapters.length} chapter(s), notes and flashcards will be removed. This can't be undone — export a backup first if you're unsure.`,
             () => { Store.set((st) => { st.subjects = st.subjects.filter((x) => x.id !== v); }); UI.toast("Subject deleted"); App.go("subjects"); }, { danger: true, ok: "Delete" });
         }
@@ -243,24 +248,27 @@
         if ((v = t("data-edit-chapter")) !== null) { const [sid, cid] = v.split("|"); return App.modalChapter(sid, cid); }
         if ((v = t("data-del-chapter")) !== null) {
           const [sid, cid] = v.split("|");
-          const { chapter } = Store.findChapter(sid, cid);
+          const chapter = Store.findChapter(sid, cid);
+          if (!chapter) return App.render();
           return UI.confirm("Delete chapter?", `<b>${U.esc(chapter.name)}</b> plus its notes and flashcards will be removed.`,
             () => { Store.set(() => { const s = Store.findSubject(sid); s.chapters = s.chapters.filter((c) => c.id !== cid); }); UI.toast("Chapter deleted"); App.go("subject", { sid }); }, { danger: true, ok: "Delete" });
         }
         if ((v = t("data-set-progress")) !== null) {
-          const [sid, cid, val] = v.split("|");
-          Store.set(() => { Store.findChapter(sid, cid).chapter.progress = U.clamp(parseInt(val, 10), 0, 100); });
+          const [sid, cid] = v.split("|");
+          const val = e.target && e.target.value != null ? e.target.value : v.split("|")[2];
+          Store.set(() => { const ch = Store.findChapter(sid, cid); if (ch) ch.progress = U.clamp(parseInt(val, 10), 0, 100); });
           return App.render();
         }
-        if ((v = t("data-set-difficulty")) !== null) {
+        if ((v = t("data-set-diff")) !== null || (v = t("data-set-difficulty")) !== null) {
           const [sid, cid, val] = v.split("|");
-          Store.set(() => { Store.findChapter(sid, cid).chapter.difficulty = parseInt(val, 10); });
+          Store.set(() => { const ch = Store.findChapter(sid, cid); if (ch) ch.difficulty = parseInt(val, 10); });
           return App.render();
         }
         if ((v = t("data-mark-revised")) !== null) {
           const [sid, cid] = v.split("|");
           Store.set(() => {
-            const { chapter } = Store.findChapter(sid, cid);
+            const chapter = Store.findChapter(sid, cid);
+            if (!chapter) return;
             chapter.lastRevised = U.todayISO();
             chapter.progress = U.clamp(chapter.progress + 4, 0, 100);
           });
@@ -273,16 +281,26 @@
         if ((v = t("data-edit-note")) !== null) { const [sid, cid, nid] = v.split("|"); return App.modalNote(sid, cid, nid); }
         if ((v = t("data-del-note")) !== null) {
           const [sid, cid, nid] = v.split("|");
-          Store.set(() => { const { chapter } = Store.findChapter(sid, cid); chapter.notes = chapter.notes.filter((n) => n.id !== nid); });
+          Store.set(() => { const chapter = Store.findChapter(sid, cid); if (chapter) chapter.notes = chapter.notes.filter((n) => n.id !== nid); });
           UI.toast("Note deleted");
+          return App.render();
+        }
+        if ((v = t("data-pin-note")) !== null) {
+          const [sid, cid, nid] = v.split("|");
+          Store.set(() => {
+            const chapter = Store.findChapter(sid, cid);
+            const n = chapter && chapter.notes.find((x) => x.id === nid);
+            if (n) { n.pinned = !n.pinned; n.ts = Date.now(); }
+          });
           return App.render();
         }
         if ((v = t("data-view-note")) !== null) {
           const [sid, cid, nid] = v.split("|");
-          const { chapter } = Store.findChapter(sid, cid);
-          const n = chapter.notes.find((x) => x.id === nid);
+          const chapter = Store.findChapter(sid, cid);
+          const n = chapter && chapter.notes.find((x) => x.id === nid);
+          if (!n) return UI.toast("That note no longer exists");
           return UI.open(`<h2>${U.esc(n.title)}</h2>
-            <div class="muted f12 mb16">${U.fmtDateLong(n.dateISO)}</div>
+            <div class="muted f12 mb16">${U.fmtDateLong(n.dateISO || U.toISO(n.ts))}</div>
             <div class="note-body">${U.mini(n.body)}</div>
             <div class="modal-actions">
               <button class="btn" data-close>Close</button>
@@ -294,18 +312,19 @@
         if ((v = t("data-add-card")) !== null) { const [sid, cid] = v.split("|"); return App.modalCard(sid, cid); }
         if ((v = t("data-del-card")) !== null) {
           const [sid, cid, fid] = v.split("|");
-          Store.set(() => { const { chapter } = Store.findChapter(sid, cid); chapter.cards = chapter.cards.filter((c) => c.id !== fid); });
+          Store.set(() => { const chapter = Store.findChapter(sid, cid); if (chapter) chapter.cards = chapter.cards.filter((c) => c.id !== fid); });
           return App.render();
         }
-        if ((v = t("data-gen-cards")) !== null) {
+        if ((v = t("data-gen-cards")) !== null || (v = t("data-cards-from-note")) !== null) {
           if (e.target.closest("[data-close-first]")) UI.close();
           const [sid, cid, nid] = v.split("|");
-          const { chapter } = Store.findChapter(sid, cid);
+          const chapter = Store.findChapter(sid, cid);
+          if (!chapter) return UI.toast("That chapter no longer exists");
           const src = nid ? (chapter.notes.find((x) => x.id === nid) || {}).body : chapter.notes.map((n) => n.body).join("\n");
           const made = Tutor.cardsFromText(src || "");
           if (!made.length) return UI.toast("Not enough note text to build cards from");
           Store.set(() => {
-            const { chapter: ch } = Store.findChapter(sid, cid);
+            const ch = Store.findChapter(sid, cid);
             made.forEach((m) => ch.cards.push({ id: U.uid(), front: m.front, back: m.back, box: 1, due: U.todayISO(), reps: 0 }));
           });
           UI.toast(`${made.length} flashcard${made.length > 1 ? "s" : ""} created`);
@@ -317,11 +336,16 @@
         if ((v = t("data-edit-hw")) !== null) return App.modalHomework(v);
         if ((v = t("data-hw-toggle")) !== null) {
           const h = Store.state.homework.find((x) => x.id === v);
+          if (!h) return App.render();
           const wasDone = h.status === "done";
-          Store.set(() => { const x = Store.state.homework.find((y) => y.id === v); x.status = wasDone ? "pending" : "done"; x.doneAt = wasDone ? null : U.todayISO(); });
-          if (!wasDone) App.award(25, "Homework done"); else App.render();
-          if (!wasDone) App.render();
-          return;
+          Store.set(() => { const x = Store.state.homework.find((y) => y.id === v); x.status = wasDone ? "todo" : "done"; x.doneAt = wasDone ? null : U.todayISO(); });
+          if (!wasDone) App.award(25, "Homework done");
+          return App.render();
+        }
+        if ((v = t("data-hw-start")) !== null) {
+          Store.set(() => { const x = Store.state.homework.find((y) => y.id === v); if (x && x.status === "todo") x.status = "progress"; });
+          UI.toast("Marked as in progress");
+          return App.render();
         }
         if ((v = t("data-del-hw")) !== null) {
           Store.set((st) => { st.homework = st.homework.filter((x) => x.id !== v); });
@@ -340,58 +364,105 @@
         }
         if ((v = t("data-syl-toggle")) !== null) {
           const [eid, idx] = v.split("|");
-          Store.set(() => { const ex = Store.state.exams.find((x) => x.id === eid); ex.syllabus[+idx].done = !ex.syllabus[+idx].done; });
+          Store.set(() => { const ex = Store.state.exams.find((x) => x.id === eid); if (ex && ex.syllabus[+idx]) ex.syllabus[+idx].done = !ex.syllabus[+idx].done; });
           return App.render();
         }
-        if ((v = t("data-add-syl")) !== null) {
+        if ((v = t("data-add-syllabus")) !== null || (v = t("data-add-syl")) !== null) {
           return UI.prompt("Add syllabus item", "Topic name", "", (val) => {
-            Store.set(() => { Store.state.exams.find((x) => x.id === v).syllabus.push({ name: val, done: false }); });
+            Store.set(() => { const ex = Store.state.exams.find((x) => x.id === v); if (ex) ex.syllabus.push({ topic: val, done: false }); });
             App.render();
           }, { ok: "Add" });
         }
+        if ((v = t("data-del-syllabus")) !== null) {
+          const [eid, idx] = v.split("|");
+          Store.set(() => { const ex = Store.state.exams.find((x) => x.id === eid); if (ex) ex.syllabus.splice(+idx, 1); });
+          return App.render();
+        }
+        if ((v = t("data-exam-plan")) !== null) return App.examPlan(v);
 
         // -------- timer --------
+        if ((v = t("data-edit-goal")) !== null) return App.modalGoal();
         if ((v = t("data-timer-mode")) !== null) return PagesStudy.setMode(v);
+        if (e.target.closest("[data-timer-toggle]")) {
+          if (PagesStudy.T.running) return PagesStudy.pauseTimer();
+          return PagesStudy.startTimer();
+        }
         if (e.target.closest("[data-timer-start]")) return PagesStudy.startTimer();
         if (e.target.closest("[data-timer-pause]")) return PagesStudy.pauseTimer();
         if (e.target.closest("[data-timer-reset]")) return PagesStudy.resetTimer();
+        if (e.target.closest("[data-timer-finish]")) return PagesStudy.finishTimer();
         if (e.target.closest("[data-timer-skip]")) return PagesStudy.skipPhase();
         if ((v = t("data-quick-min")) !== null) return PagesStudy.quickLog(parseInt(v, 10));
         if ((v = t("data-confidence")) !== null) return PagesStudy.setConfidence(parseInt(v, 10));
 
         // -------- planner --------
+        if ((v = t("data-week-shift")) !== null) {
+          const base = App.route.weekStart || U.weekStart();
+          App.route.weekStart = v === "0" ? null : U.addDays(base, parseInt(v, 10) * 7);
+          return App.render();
+        }
         if ((v = t("data-plan-week")) !== null) { App.route.weekOffset = (App.route.weekOffset || 0) + parseInt(v, 10); return App.render(); }
+        if ((v = t("data-add-block-on")) !== null) return App.modalBlock(v);
         if ((v = t("data-add-block")) !== null) return App.modalBlock(v);
         if ((v = t("data-del-block")) !== null) {
           Store.set((st) => { st.plan = st.plan.filter((b) => b.id !== v); });
           return App.render();
         }
-        if ((v = t("data-block-done")) !== null) {
-          Store.set((st) => { const b = st.plan.find((x) => x.id === v); b.done = !b.done; });
+        if ((v = t("data-plan-toggle")) !== null || (v = t("data-block-done")) !== null) {
+          Store.set((st) => { const b = st.plan.find((x) => x.id === v); if (b) b.done = !b.done; });
           return App.render();
         }
-        if ((v = t("data-auto-plan")) !== null) return App.autoPlan(v);
+        if ((v = t("data-auto-plan")) !== null) return App.autoPlan(v || U.todayISO());
 
         // -------- quiz --------
         if (e.target.closest("[data-quiz-setup]")) return App.render();
-        if (e.target.closest("[data-quiz-start]")) return PagesStudy.startQuiz({
-          subject: UI.val("qz-subject"), chapter: UI.val("qz-chapter"),
-          count: UI.num("qz-count", 10), difficulty: UI.val("qz-diff"),
-        });
+        if ((v = t("data-gen-quiz")) !== null || e.target.closest("[data-quiz-start]")) {
+          return PagesStudy.startQuiz({
+            subject: UI.val("q-subject") || UI.val("qz-subject"),
+            chapter: UI.val("q-chapter") || UI.val("qz-chapter"),
+            count: UI.num("q-count", 5) || UI.num("qz-count", 5),
+            difficulty: UI.val("q-diff") || UI.val("qz-diff"),
+          });
+        }
+        if ((v = t("data-quick-quiz")) !== null) return PagesStudy.startQuiz({ subject: v, count: 5 });
         if ((v = t("data-quiz-answer")) !== null) return PagesStudy.answerQuiz(parseInt(v, 10));
         if (e.target.closest("[data-quiz-next]")) return PagesStudy.nextQuiz();
         if (e.target.closest("[data-quiz-exit]")) return PagesStudy.exitQuiz();
-        if ((v = t("data-quiz-retry")) !== null) return PagesStudy.retryQuiz(v);
-        if ((v = t("data-wrong-to-cards")) !== null) return PagesStudy.wrongToCards();
+        if ((v = t("data-retake-quiz")) !== null) return PagesStudy.retryQuiz(v);
+        if ((v = t("data-cards-from-wrong")) !== null || (v = t("data-wrong-to-cards")) !== null) return PagesStudy.wrongToCards();
+
+        // -------- flashcards / revision --------
+        if (e.target.closest("[data-review-all]")) return PagesStudy.startDeck(Store.allCards());
+        if (e.target.closest("[data-review-due]")) {
+          const due = Store.dueCards();
+          return PagesStudy.startDeck(due);
+        }
+        if ((v = t("data-review-subject")) !== null) {
+          return PagesStudy.startDeck(Store.allCards().filter((x) => x.subject.name === v));
+        }
+        if ((v = t("data-review-chapter")) !== null) {
+          const [sid, cid] = v.split("|");
+          const items = Store.allCards().filter((x) => x.chapter.id === cid && x.subject.id === sid);
+          return PagesStudy.startDeck(items);
+        }
+        if ((v = t("data-study-chapter")) !== null) return App.studyChapter(v);
+        if ((v = t("data-quiz-chapter")) !== null) {
+          const [sid, cid] = v.split("|");
+          const subj = Store.findSubject(sid);
+          const ch = subj && subj.chapters.find((c) => c.id === cid);
+          if (!ch) return UI.toast("That chapter no longer exists");
+          return PagesStudy.startQuiz({ subject: subj.name, chapter: ch.name, count: 5 });
+        }
+        if ((v = t("data-revise-now")) !== null) { const [sid, cid] = v.split("|"); return App.go("chapter", { sid, cid }); }
 
         // -------- flashcard deck --------
         if ((v = t("data-start-deck")) !== null) return PagesStudy.startDeck(v);
-        if (e.target.closest("[data-flip-card]")) return PagesStudy.flipCard();
-        if ((v = t("data-rate-card")) !== null) return PagesStudy.rateCard(parseInt(v, 10));
-        if (e.target.closest("[data-exit-deck]")) return PagesStudy.exitDeck();
+        if (e.target.closest("[data-fc-flip]") || e.target.closest("[data-flip-card]")) return PagesStudy.flipCard();
+        if ((v = t("data-fc-rate")) !== null || (v = t("data-rate-card")) !== null) return PagesStudy.rateCard(v);
+        if (e.target.closest("[data-deck-exit]") || e.target.closest("[data-exit-deck]")) return PagesStudy.exitDeck();
 
         // -------- tutor --------
-        if (e.target.closest("[data-send-chat]")) return PagesStudy.sendChat();
+        if (e.target.closest("[data-chat-send]") || e.target.closest("[data-send-chat]")) return PagesStudy.sendChat();
         if ((v = t("data-suggest")) !== null) return PagesStudy.sendChat(v);
         if (e.target.closest("[data-clear-chat]")) {
           return UI.confirm("Clear conversation?", "Your chat history with the tutor will be erased. Notes and flashcards you created from it stay.",
@@ -399,13 +470,20 @@
         }
 
         // -------- scan --------
-        if (e.target.closest("[data-run-scan]")) return PagesStudy.runScan();
-        if (e.target.closest("[data-reset-scan]")) return PagesStudy.resetScan();
-        if ((v = t("data-scan-save")) !== null) return PagesStudy.saveScan(v);
-        if (e.target.closest("[data-pick-image]")) return document.getElementById("scanFile").click();
+        if (e.target.closest("[data-run-scan]") || e.target.closest("[data-scan-run]")) {
+          return PagesStudy.runScan(UI.val("scanText"), UI.val("scanName"));
+        }
+        if (e.target.closest("[data-reset-scan]") || e.target.closest("[data-scan-reset]")) return PagesStudy.resetScan();
+        if (e.target.closest("[data-scan-demo]")) {
+          const s = PagesStudy.sampleScan();
+          return PagesStudy.runScan(s.text, s.name);
+        }
+        if (e.target.closest("[data-save-scan-cards]") || e.target.closest("[data-scan-save]")) return PagesStudy.saveScanCards();
+        if (e.target.closest("[data-scan-quiz]")) return PagesStudy.scanQuiz();
+        if (e.target.closest("[data-scan-note]")) return PagesStudy.saveScanNote();
+        if (e.target.closest("#dropZone") || e.target.closest("[data-pick-image]")) return document.getElementById("scanFile").click();
 
-        // -------- revision --------
-        if ((v = t("data-revise-now")) !== null) { const [sid, cid] = v.split("|"); return App.go("chapter", { sid, cid }); }
+        // -------- revision session --------
         if (e.target.closest("[data-revise-session]")) return App.go("timer");
 
         // -------- friends & challenges --------
@@ -510,8 +588,19 @@
           UI.toast(el.checked ? "Pro preview on" : "Pro preview off");
           return;
         }
-        if (el.id === "qz-subject") {
-          document.getElementById("qz-chapter").outerHTML = UI.chapterSelect("qz-chapter", el.value, "");
+        if (el.hasAttribute("data-set-progress")) {
+          const [sid, cid] = el.getAttribute("data-set-progress").split("|");
+          Store.set(() => { const ch = Store.findChapter(sid, cid); if (ch) ch.progress = U.clamp(parseInt(el.value, 10), 0, 100); });
+          App.render();
+          return;
+        }
+        if (el.id === "q-subject" || el.id === "qz-subject") {
+          const id = el.id, wrap = document.getElementById(id === "q-subject" ? "q-chapter-wrap" : "qz-chapter");
+          if (wrap) wrap.innerHTML = UI.chapterSelect(id === "q-subject" ? "q-chapter" : "qz-chapter", el.value, "");
+          return;
+        }
+        if (el.id === "t-subject" && document.getElementById("t-chapter-wrap")) {
+          document.getElementById("t-chapter-wrap").innerHTML = UI.chapterSelect("t-chapter", el.value, "");
           return;
         }
         if (el.id === "hw-subject" && document.getElementById("hw-chapter")) {
@@ -527,7 +616,7 @@
           const btn = document.querySelector(`[data-quiz-answer="${+e.key - 1}"]`);
           if (btn) btn.click();
         }
-        if (App.route.page === "flashcards" && e.code === "Space" && document.querySelector("[data-flip-card]")) {
+        if (App.route.page === "flashcards" && e.code === "Space" && (document.querySelector("[data-fc-flip]") || document.querySelector("[data-flip-card]"))) {
           e.preventDefault(); PagesStudy.flipCard();
         }
       });
@@ -600,7 +689,7 @@
     },
 
     modalChapter(sid, cid) {
-      const ch = cid ? Store.findChapter(sid, cid).chapter : null;
+      const ch = cid ? Store.findChapter(sid, cid) : null;
       UI.open(`
         <h2>${ch ? "Edit chapter" : "Add a chapter"}</h2>
         <div class="field"><label>Chapter name</label>
@@ -623,7 +712,7 @@
             const progress = U.clamp(UI.num("ch-prog", 0), 0, 100);
             const difficulty = UI.num("ch-diff", 2);
             Store.set(() => {
-              if (ch) { const c = Store.findChapter(sid, cid).chapter; c.name = name; c.progress = progress; c.difficulty = difficulty; }
+              if (ch) { const c = Store.findChapter(sid, cid); c.name = name; c.progress = progress; c.difficulty = difficulty; }
               else Store.findSubject(sid).chapters.push({ id: U.uid(), name, progress, difficulty, lastRevised: null, notes: [], cards: [] });
             });
             UI.close(); App.render();
@@ -633,7 +722,8 @@
     },
 
     modalNote(sid, cid, nid) {
-      const { chapter } = Store.findChapter(sid, cid);
+      const chapter = Store.findChapter(sid, cid);
+      if (!chapter) return UI.toast("That chapter no longer exists");
       const n = nid ? chapter.notes.find((x) => x.id === nid) : null;
       UI.open(`
         <h2>${n ? "Edit note" : "New note"}</h2>
@@ -649,7 +739,7 @@
             const title = UI.val("nt-title"), body = document.getElementById("nt-body").value.trim();
             if (!title) return UI.toast("Give the note a title");
             Store.set(() => {
-              const { chapter: ch } = Store.findChapter(sid, cid);
+              const ch = Store.findChapter(sid, cid);
               if (n) { const x = ch.notes.find((y) => y.id === nid); x.title = title; x.body = body; }
               else ch.notes.unshift({ id: U.uid(), title, body, dateISO: U.todayISO() });
             });
@@ -676,7 +766,8 @@
             const back = document.getElementById("fc-back").value.trim();
             if (!front || !back) return UI.toast("Both sides are needed");
             Store.set(() => {
-              Store.findChapter(sid, cid).chapter.cards.push({ id: U.uid(), front, back, box: 1, due: U.todayISO(), reps: 0 });
+              const ch = Store.findChapter(sid, cid);
+              if (ch) ch.cards.push({ id: U.uid(), front, back, box: 1, due: U.todayISO(), reps: 0 });
             });
             UI.close(); UI.toast("Flashcard added"); App.render();
           };
@@ -685,19 +776,20 @@
 
     modalHomework(hid) {
       const h = hid ? Store.state.homework.find((x) => x.id === hid) : null;
+      const hwPrio = h ? String(h.priority || "Medium").toLowerCase() : "medium";
       UI.open(`
         <h2>${h ? "Edit task" : "Add homework"}</h2>
         <div class="field"><label>What needs doing?</label>
-          <input id="hw-title" value="${U.esc(h ? h.title : "")}" placeholder="e.g. Exercise 2.4, questions 1–8" /></div>
+          <input id="hw-title" value="${U.esc(h ? h.task : "")}" placeholder="e.g. Exercise 2.4, questions 1–8" /></div>
         <div class="row">
           <div class="field"><label>Subject</label>${UI.subjectSelect("hw-subject", h ? h.subject : "")}</div>
           <div class="field"><label>Due date</label>
-            <input id="hw-due" type="date" value="${h ? h.dueISO : U.addDays(U.todayISO(), 1)}" /></div>
+            <input id="hw-due" type="date" value="${h ? h.due : U.addDays(U.todayISO(), 1)}" /></div>
         </div>
         <div class="row">
           <div class="field"><label>Priority</label>
             <select id="hw-prio">${["low", "medium", "high"].map((p) =>
-              `<option value="${p}" ${(h ? h.priority : "medium") === p ? "selected" : ""}>${p[0].toUpperCase() + p.slice(1)}</option>`).join("")}</select></div>
+              `<option value="${p}" ${hwPrio === p ? "selected" : ""}>${p[0].toUpperCase() + p.slice(1)}</option>`).join("")}</select></div>
           <div class="field"><label>Estimated minutes</label>
             <input id="hw-est" type="number" min="5" max="480" value="${h ? h.estMin || 30 : 30}" /></div>
         </div>
@@ -710,14 +802,15 @@
           document.getElementById("hw-save").onclick = () => {
             const title = UI.val("hw-title");
             if (!title) return UI.toast("Describe the task first");
+            const cap = (p) => p ? p.charAt(0).toUpperCase() + p.slice(1) : "Medium";
             const rec = {
-              title, subject: UI.val("hw-subject"), dueISO: UI.val("hw-due") || U.todayISO(),
-              priority: UI.val("hw-prio"), estMin: U.clamp(UI.num("hw-est", 30), 5, 480),
+              task: title, subject: UI.val("hw-subject"), due: UI.val("hw-due") || U.todayISO(),
+              priority: cap(UI.val("hw-prio")), estMin: U.clamp(UI.num("hw-est", 30), 5, 480),
               notes: document.getElementById("hw-notes").value.trim(),
             };
             Store.set((st) => {
               if (h) Object.assign(st.homework.find((x) => x.id === hid), rec);
-              else st.homework.push(Object.assign({ id: U.uid(), status: "pending", doneAt: null, createdAt: U.todayISO() }, rec));
+              else st.homework.push(Object.assign({ id: U.uid(), status: "todo", doneAt: null, createdAt: U.todayISO() }, rec));
             });
             UI.close(); UI.toast(h ? "Task updated" : "Task added"); App.render();
           };
@@ -729,11 +822,11 @@
       UI.open(`
         <h2>${ex ? "Edit exam" : "Add an exam"}</h2>
         <div class="field"><label>Exam name</label>
-          <input id="ex-title" value="${U.esc(ex ? ex.title : "")}" placeholder="e.g. Mid-Term Mathematics" /></div>
+          <input id="ex-title" value="${U.esc(ex ? ex.title || ex.subject : "")}" placeholder="e.g. Mid-Term Mathematics" /></div>
         <div class="row">
           <div class="field"><label>Subject</label>${UI.subjectSelect("ex-subject", ex ? ex.subject : "")}</div>
           <div class="field"><label>Date</label>
-            <input id="ex-date" type="date" value="${ex ? ex.dateISO : U.addDays(U.todayISO(), 14)}" /></div>
+            <input id="ex-date" type="date" value="${ex ? ex.date : U.addDays(U.todayISO(), 14)}" /></div>
         </div>
         <div class="row">
           <div class="field"><label>Total marks</label>
@@ -751,14 +844,14 @@
             const title = UI.val("ex-title");
             if (!title) return UI.toast("Name the exam");
             const rec = {
-              title, subject: UI.val("ex-subject"), dateISO: UI.val("ex-date") || U.addDays(U.todayISO(), 7),
+              title, subject: UI.val("ex-subject"), date: UI.val("ex-date") || U.addDays(U.todayISO(), 7),
               totalMarks: UI.num("ex-marks", 100), target: U.clamp(UI.num("ex-target", 85), 0, 100),
             };
             Store.set((st) => {
               if (ex) Object.assign(st.exams.find((x) => x.id === eid), rec);
               else {
                 const syl = UI.val("ex-syl").split("\n").map((x) => x.trim()).filter(Boolean);
-                st.exams.push(Object.assign({ id: U.uid(), syllabus: syl.map((n) => ({ name: n, done: false })) }, rec));
+                st.exams.push(Object.assign({ id: U.uid(), syllabus: syl.map((n) => ({ topic: n, done: false })) }, rec));
               }
             });
             UI.close(); UI.toast(ex ? "Exam updated" : "Exam added"); App.render();
@@ -790,11 +883,15 @@
           <button class="btn primary" id="bl-save">Add block</button>
         </div>`, { onOpen() {
           document.getElementById("bl-save").onclick = () => {
+            const mins = U.clamp(UI.num("bl-min", 45), 10, 240);
+            const start = UI.val("bl-start") || "16:00";
+            const [sh, sm] = start.split(":").map(Number);
+            const endMin = (sh || 0) * 60 + (sm || 0) + mins;
+            const end = `${String(Math.floor(endMin / 60) % 24).padStart(2, "0")}:${String(endMin % 60).padStart(2, "0")}`;
             Store.set((st) => {
               st.plan.push({
                 id: U.uid(), dateISO: UI.val("bl-date"), subject: UI.val("bl-subject"),
-                start: UI.val("bl-start") || "16:00", minutes: U.clamp(UI.num("bl-min", 45), 10, 240),
-                kind: UI.val("bl-kind"), note: UI.val("bl-note"), done: false,
+                start, end, minutes: mins, kind: UI.val("bl-kind"), note: UI.val("bl-note"), done: false,
               });
             });
             UI.close(); UI.toast("Block added"); App.render();
@@ -898,6 +995,61 @@
     // ============================================================
     //  ACTIONS
     // ============================================================
+    /** Change the daily study goal (minutes). */
+    modalGoal() {
+      const cur = Store.state.profile.dailyGoalMin || 120;
+      UI.open(`
+        <h2>Daily study goal</h2>
+        <p class="muted f13 mb16">How many minutes do you want to study each day? This drives the goal ring and the planner.</p>
+        <div class="field"><label>Minutes per day</label>
+          <input id="goal-min" type="number" min="15" max="720" value="${cur}" /></div>
+        <div class="modal-actions">
+          <button class="btn" data-close>Cancel</button>
+          <button class="btn primary" id="goal-save">Save</button>
+        </div>`, { onOpen() {
+        document.getElementById("goal-save").onclick = () => {
+          const m = U.clamp(UI.num("goal-min", cur), 15, 720);
+          Store.set((st) => { st.profile.dailyGoalMin = m; });
+          UI.close(); UI.toast(`Daily goal set to ${U.fmtMin(m)}`); App.render();
+        };
+      }});
+    },
+
+    /** Open the timer with a specific subject/chapter pre-selected. */
+    studyChapter(v) {
+      const [sid, cid] = String(v || "").split("|");
+      const subj = Store.findSubject(sid);
+      const ch = subj && subj.chapters.find((c) => c.id === cid);
+      if (!subj) return UI.toast("That subject no longer exists");
+      PagesStudy.T.subject = subj.name;
+      PagesStudy.T.chapter = ch ? ch.name : "";
+      PagesStudy.resetTimer();
+      App.go("timer");
+    },
+
+    /** Create study blocks for the topics still uncovered before an exam. */
+    examPlan(eid) {
+      const ex = Store.state.exams.find((x) => x.id === eid);
+      if (!ex) return UI.toast("That exam no longer exists");
+      const left = (ex.syllabus || []).filter((t) => !t.done);
+      if (!left.length) return UI.toast("Syllabus is already fully covered — schedule a review/quiz session instead");
+      const daysLeft = Math.max(1, U.daysBetween(U.todayISO(), ex.date || U.todayISO()));
+      const perDay = Math.max(1, Math.ceil(left.length / daysLeft));
+      const blocks = [];
+      left.forEach((t, i) => {
+        const off = Math.min(Math.floor(i / perDay), Math.max(0, daysLeft - 1));
+        const d = U.addDays(U.todayISO(), off);
+        const start = 16 * 60 + (i % perDay) * 75; // 16:00, 17:15, …
+        const startStr = `${String(Math.floor(start / 60) % 24).padStart(2, "0")}:${String(start % 60).padStart(2, "0")}`;
+        const end = start + 45;
+        const endStr = `${String(Math.floor(end / 60) % 24).padStart(2, "0")}:${String(end % 60).padStart(2, "0")}`;
+        blocks.push({ id: U.uid(), dateISO: d, start: startStr, end: endStr, subject: ex.subject, chapter: t.topic || t.name, note: "Exam prep", done: false });
+      });
+      Store.set((st) => { st.plan = st.plan.concat(blocks); });
+      UI.toast(`${blocks.length} prep block${blocks.length > 1 ? "s" : ""} added to your planner`);
+      App.go("planner");
+    },
+
     autoPlan(dateISO) {
       const blocks = Tutor.suggestPlan(dateISO, Store.state.profile.dailyGoalMin);
       if (!blocks.length) return UI.toast("Add a subject first and I'll build a plan");

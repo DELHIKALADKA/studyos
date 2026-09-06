@@ -222,7 +222,8 @@
 
     /** Fake-but-useful "scan" analysis of pasted or typed page text. */
     analyseText(text, name) {
-      const clean = String(text).replace(/\s+/g, " ").trim();
+      const raw = String(text).replace(/\r/g, "");
+      const clean = raw.replace(/\s+/g, " ").trim();
       const sentences = clean.split(/(?<=[.!?])\s+/).filter((s) => s.length > 20);
       const topic = findTopic(clean);
       const words = clean.toLowerCase().match(/[a-z]{5,}/g) || [];
@@ -243,7 +244,7 @@
         summary,
         points: points.length ? points : ["Add more text for a detailed breakdown."],
         keywords,
-        cards: this.cardsFromText(clean, 8),
+        cards: this.cardsFromText(raw, 8),
         topicTitle: topic ? topic.title : null,
       };
     },

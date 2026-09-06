@@ -91,6 +91,109 @@
     </div>`;
   };
 
+  P.setMode = function (mode) {
+    if (!MODES[mode] || T.running) return;
+    T.mode = mode;
+    if (mode === "custom") {
+      T.total = U.clamp(UI.num("c-study", 30), 5, 180) * 60;
+      T.remaining = T.total;
+    } else {
+      T.total = MODES[mode].study * 60;
+      T.remaining = T.total;
+    }
+    T.onBreak = false;
+    App.render();
+  };
+
+  P.startTimer = function () {
+    if (T.running) return;
+    if (T.mode === "custom" && !T.onBreak) {
+      T.total = U.clamp(UI.num("c-study", 30), 5, 180) * 60;
+      T.remaining = T.total;
+    }
+    T.subject = UI.val("t-subject");
+    T.chapter = UI.val("t-chapter");
+    T.running = true;
+    if (!T.interval) T.interval = setInterval(P.timerTick, 1000);
+    App.render();
+  };
+
+  P.pauseTimer = function () {
+    if (!T.running) return;
+    T.running = false;
+    if (T.interval) { clearInterval(T.interval); T.interval = null; }
+    App.render();
+  };
+
+  P.resetTimer = function () {
+    T.running = false;
+    T.onBreak = false;
+    if (T.interval) { clearInterval(T.interval); T.interval = null; }
+    T.total = MODES[T.mode].study * 60;
+    T.remaining = T.total;
+    App.render();
+  };
+
+  /** Log the currently elapsed focus time without waiting for the countdown. */
+  P.finishTimer = function () {
+    const mins = Math.round((T.total - T.remaining) / 60);
+    if (mins < 1) return UI.toast("Start the timer first — nothing to log yet");
+    T.running = false;
+    if (T.interval) { clearInterval(T.interval); T.interval = null; }
+    P.logSession(T.subject, T.chapter, mins);
+    P.askConfidence(mins);
+    T.total = MODES[T.mode].study * 60;
+    T.remaining = T.total;
+    T.onBreak = false;
+    App.render();
+  };
+
+  P.skipPhase = function () {
+    if (T.interval) { clearInterval(T.interval); T.interval = null; }
+    T.running = false;
+    T.onBreak = !T.onBreak;
+    T.total = MODES[T.mode][T.onBreak ? "brk" : "study"] * 60;
+    T.remaining = T.total;
+    App.render();
+  };
+
+  /** Pause the countdown when the user navigates away from the timer page. */
+  P.stopTimerIfRunning = function (page) {
+    if (T.interval && page !== "timer") {
+      clearInterval(T.interval);
+      T.interval = null;
+      T.running = false;
+    }
+  };
+
+  /** Manual "+25 min" / "+50 min" quick log from the dashboard. */
+  P.quickLog = function (minutes) {
+    const m = U.clamp(minutes || 25, 5, 480);
+    Store.set((s) => s.sessions.push({
+      id: U.uid(), dateISO: U.todayISO(), minutes: m,
+      subject: "General", chapter: "", confidence: 3, mode: "manual",
+    }));
+    Store.bumpStreak();
+    App.award(10, "Quick log");
+    App.render();
+  };
+
+  /** Confidence picker used after a timer session (called from app.js wire). */
+  P.setConfidence = function (v) {
+    Store.set((s) => {
+      const last = s.sessions[s.sessions.length - 1];
+      if (last) last.confidence = v;
+      if (last && last.subject && last.chapter) {
+        const subj = s.subjects.find((x) => x.name === last.subject);
+        const ch = subj && subj.chapters.find((c) => c.name === last.chapter);
+        if (ch) ch.progress = U.clamp(ch.progress + (v - 2) * 3, 0, 100);
+      }
+    });
+    UI.close();
+    UI.toast(v >= 3 ? "Logged. Nice session." : "Logged — I'll queue this topic sooner.");
+    App.render();
+  };
+
   P.timerTick = function () {
     if (T.remaining > 0) {
       T.remaining--;
@@ -152,21 +255,6 @@
         ${[["😕", 1, "Low"], ["😐", 2, "Okay"], ["🙂", 3, "Good"], ["🔥", 4, "Excellent"]].map(([e, v, l]) =>
           `<button class="btn" style="flex:1;flex-direction:column;font-size:23px;padding:13px 4px" data-confidence="${v}">${e}<span class="f11 b7">${l}</span></button>`).join("")}
       </div>`);
-    document.querySelectorAll("[data-confidence]").forEach((el) => el.onclick = () => {
-      const v = parseInt(el.dataset.confidence, 10);
-      Store.set((s) => {
-        const last = s.sessions[s.sessions.length - 1];
-        if (last) last.confidence = v;
-        if (last && last.subject && last.chapter) {
-          const subj = s.subjects.find((x) => x.name === last.subject);
-          const ch = subj && subj.chapters.find((c) => c.name === last.chapter);
-          if (ch) ch.progress = U.clamp(ch.progress + (v - 2) * 3, 0, 100);
-        }
-      });
-      UI.close();
-      UI.toast(v >= 3 ? "Logged. Nice session." : "Logged — I'll queue this topic sooner.");
-      App.render();
-    });
   };
 
   // ============================================================
@@ -397,6 +485,32 @@
   let deck = null; // { items:[{subject,chapter,card}], idx, revealed, stats:{} }
   P.getDeck = () => deck;
 
+  /** Leave the quiz runner (or results) and return to the setup screen. */
+  P.exitQuiz = function () { quiz = null; App.go("quiz"); };
+  /** Restart the last quiz with a fresh shuffle of the same questions. */
+  P.retryQuiz = function () {
+    if (!quiz) return;
+    quiz.idx = 0; quiz.score = 0; quiz.answered = null; quiz.wrong = []; quiz.finished = false;
+    App.render();
+  };
+  /** Turn the questions answered wrong in the last quiz into flashcards. */
+  P.wrongToCards = function () {
+    if (!quiz || !quiz.wrong.length) return UI.toast("No wrong answers to save in this quiz");
+    let subj = Store.state.subjects.find((s) => s.name === quiz.subject);
+    let ch = subj && quiz.chapter ? subj.chapters.find((c) => c.name === quiz.chapter) : null;
+    if (!ch) ch = subj && subj.chapters[0];
+    if (!ch) {
+      // No matching subject yet — create cards under the first subject/chapter if any.
+      const first = Store.state.subjects[0] && Store.state.subjects[0].chapters[0];
+      if (!first) return UI.toast("Add a subject with a chapter first — then I can save these cards there");
+      ch = first;
+    }
+    const made = quiz.wrong.map((w) => ({ id: U.uid(), front: w.q, back: w.answer, box: 1, due: U.todayISO(), reps: 0 }));
+    Store.set(() => { ch.cards = ch.cards.concat(made); });
+    UI.toast(`${made.length} flashcard${made.length > 1 ? "s" : ""} created from this quiz`);
+    App.render();
+  };
+
   P.flashcards = function () {
     if (deck) return deckRunner();
     const due = Store.dueCards();
@@ -601,7 +715,12 @@ Try one of the prompts below.
   };
 
   P.sendChat = async function (text) {
-    const msg = String(text || "").trim();
+    const box = document.getElementById("chatInput");
+    let msg = String(text || "").trim();
+    if (!msg && box) {
+      msg = String(box.value || "").trim();
+      if (box.value) box.value = "";
+    }
     if (!msg) return;
     Store.set((s) => s.chats.push({ id: U.uid(), role: "user", text: msg, ts: Date.now() }));
     App.render();
@@ -709,6 +828,7 @@ Try one of the prompts below.
     </div>` : ""}`;
   };
   P.runScan = function (text, name) {
+    if (!String(text || "").trim()) return UI.toast("Paste or type some text first — then I can analyse it");
     scanResult = Tutor.analyseText(text, name);
     Store.set((s) => s.scans.push({ id: U.uid(), ts: Date.now(), name: scanResult.name, summary: scanResult.summary, points: scanResult.points }));
     App.award(15, "Page analysed");
@@ -716,6 +836,113 @@ Try one of the prompts below.
   };
   P.resetScan = function () { scanResult = null; App.render(); };
   P.getScan = () => scanResult;
+
+  /** Show the picked image as a preview (offline OCR isn't possible). */
+  P.readImage = function (file) {
+    const out = document.getElementById("scanPreview");
+    if (!out) return;
+    const r = new FileReader();
+    r.onload = () => {
+      out.innerHTML = `<img src="${r.result}" alt="Attached page preview" style="max-width:100%;border-radius:12px;border:1px solid var(--border)" />` +
+        `<p class="faint f12 mt8">Image attached. Since StudyOS runs offline, it can't read the text — type or paste it beside the photo, then press Analyse.</p>`;
+    };
+    r.onerror = () => UI.toast("That image couldn't be read");
+    r.readAsDataURL(file);
+  };
+
+  /** Save the flashcards generated by a scan into a chapter. */
+  P.saveScanCards = function () {
+    const cards = (scanResult && scanResult.cards) || [];
+    if (!cards.length) return UI.toast("No flashcards were generated for this scan");
+    if (!Store.state.subjects.length) return UI.toast("Add a subject first — then you can save these cards");
+    UI.open(`
+      <h2>Save ${cards.length} flashcard${cards.length > 1 ? "s" : ""}</h2>
+      <div class="field"><label>Subject</label>${UI.subjectSelect("sv-subject", Store.state.subjects[0].name)}</div>
+      <div class="field"><label>Chapter</label><div id="sv-chapter-wrap">${UI.chapterSelect("sv-chapter", Store.state.subjects[0].name, "")}</div></div>
+      <div class="modal-actions">
+        <button class="btn" data-close>Cancel</button>
+        <button class="btn primary" id="sv-save">Save cards</button>
+      </div>`, { onOpen() {
+      document.getElementById("sv-subject").onchange = () => {
+        document.getElementById("sv-chapter-wrap").innerHTML = UI.chapterSelect("sv-chapter", UI.val("sv-subject"), "");
+      };
+      document.getElementById("sv-save").onclick = () => {
+        const sid = Store.state.subjects.find((s) => s.name === UI.val("sv-subject"));
+        const chName = UI.val("sv-chapter");
+        let ch = sid && chName ? sid.chapters.find((c) => c.name === chName) : null;
+        if (!ch) ch = sid && sid.chapters[0];
+        if (!ch) return UI.toast("Add a chapter to that subject first");
+        Store.set(() => {
+          cards.forEach((c) => ch.cards.push({ id: U.uid(), front: c.front, back: c.back, box: 1, due: U.todayISO(), reps: 0 }));
+        });
+        UI.close();
+        UI.toast(`${cards.length} flashcard${cards.length > 1 ? "s" : ""} saved`);
+        App.render();
+      };
+    }});
+  };
+
+  /** Quiz the user on the flashcards produced by the scan. */
+  P.scanQuiz = function () {
+    const cards = (scanResult && scanResult.cards) || [];
+    if (cards.length < 2) return UI.toast("Not enough scanned cards for a quiz — try a longer page");
+    const qs = U.shuffle(cards).slice(0, Math.min(8, cards.length)).map((c, i, arr) => {
+      const others = U.shuffle(arr.filter((x) => x !== c)).slice(0, 3);
+      const opts = U.shuffle([c.back].concat(others.map((o) => o.back)));
+      return {
+        q: c.front.replace(/\?$/, "") + "?",
+        opts,
+        a: opts.indexOf(c.back),
+        why: "",
+      };
+    });
+    quiz = { subject: scanResult.topicTitle || "Scan & Learn", chapter: "", difficulty: "medium", questions: qs, idx: 0, score: 0, answered: null, wrong: [], finished: false };
+    App.go("quiz");
+  };
+
+  /** Save the scan summary + key points as a note in a chapter. */
+  P.saveScanNote = function () {
+    if (!scanResult) return;
+    if (!Store.state.subjects.length) return UI.toast("Add a subject first — then you can save this note");
+    UI.open(`
+      <h2>Save as a note</h2>
+      <div class="field"><label>Title</label><input id="sn-title" value="${U.esc(scanResult.name || "Scanned page")}" /></div>
+      <div class="field"><label>Subject</label>${UI.subjectSelect("sn-subject", Store.state.subjects[0].name)}</div>
+      <div class="field"><label>Chapter</label><div id="sn-chapter-wrap">${UI.chapterSelect("sn-chapter", Store.state.subjects[0].name, "")}</div></div>
+      <div class="modal-actions">
+        <button class="btn" data-close>Cancel</button>
+        <button class="btn primary" id="sn-save">Save note</button>
+      </div>`, { onOpen() {
+      document.getElementById("sn-subject").onchange = () => {
+        document.getElementById("sn-chapter-wrap").innerHTML = UI.chapterSelect("sn-chapter", UI.val("sn-subject"), "");
+      };
+      document.getElementById("sn-save").onclick = () => {
+        const sid = Store.state.subjects.find((s) => s.name === UI.val("sn-subject"));
+        const chName = UI.val("sn-chapter");
+        let ch = sid && chName ? sid.chapters.find((c) => c.name === chName) : null;
+        if (!ch) ch = sid && sid.chapters[0];
+        if (!ch) return UI.toast("Add a chapter to that subject first");
+        const body = [scanResult.summary, "", ...scanResult.points.map((p) => `- ${p}`)].join("\n");
+        Store.set(() => ch.notes.unshift({ id: U.uid(), title: UI.val("sn-title") || "Scanned page", body, dateISO: U.todayISO() }));
+        UI.close();
+        UI.toast("Note saved");
+        App.render();
+      };
+    }});
+  };
+
+  /** Shared sample used by the demo button so the feature is testable offline. */
+  P.sampleScan = function () {
+    return {
+      name: "Sample page — Photosynthesis",
+      text: `Photosynthesis is the process by which green plants make their own food using sunlight, water and carbon dioxide.
+Chlorophyll is the green pigment in leaves that captures light energy.
+The light energy splits water molecules and combines carbon dioxide into glucose, releasing oxygen as a by-product.
+Thylakoids: the stacks of membranes inside chloroplasts where the light reactions happen.
+Stomata: the tiny pores on leaves that let carbon dioxide in and oxygen out.
+Glucose is stored as starch and used by the plant for growth and energy.`,
+    };
+  };
 
   global.PagesStudy = P;
 })(window);
