@@ -394,6 +394,24 @@
     ${dbCard()}
 
     <div class="card mb16">
+      <h3>📱 Install on your phone</h3>
+      <p class="muted f13" style="line-height:1.7">StudyOS is a PWA — it can be installed on the home screen and opens full-screen and offline, like a normal app. Your data never leaves the device either way.</p>
+      ${global.App && App._installEvt
+        ? `<button class="btn primary block mt16" data-install-app>⬇️ Install StudyOS</button>`
+        : `<div class="item mt16" style="align-items:flex-start">
+            <span style="font-size:18px">📲</span>
+            <div class="grow">
+              <div class="t f13">Install it manually</div>
+              <div class="s" style="line-height:1.6;margin-top:4px">
+                <b>Android / Chrome:</b> menu ⋮ → <b>Add to Home screen</b> (or "Install app")<br>
+                <b>iPhone / iPad:</b> Share → <b>Add to Home Screen</b><br>
+                <b>Desktop:</b> use the install icon in the address bar
+              </div>
+            </div>
+          </div>`}
+    </div>
+
+    <div class="card mb16">
       <h3>🔒 Privacy</h3>
       <div class="muted f13" style="line-height:1.8">
         <p><b style="color:var(--text)">Everything is stored in this browser.</b> Your notes, tasks, sessions, quiz results and flashcards live in this device's local storage. There is no server and no account database.</p>

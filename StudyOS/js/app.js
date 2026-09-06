@@ -65,6 +65,7 @@
   const App = {
     route: { page: "dashboard" },
     obDraft: { subjects: [] },
+    _installEvt: null, // beforeinstallprompt event, captured for the Install button
 
     // ---------- boot ----------
     boot(opts) {
@@ -81,7 +82,10 @@
         App.obDraft = { subjects: [], name: Store.state.profile.name };
         App.route = { page: "onboard", obStep: 1 };
       } else {
-        App.route = { page: o.page || "dashboard" };
+        // An installed PWA shortcut may deep-link to a page (#timer, #revision…).
+        const hash = (location.hash || "").replace(/^#/, "");
+        const target = o.page || (hash && PAGES[hash] ? hash : "dashboard");
+        App.route = { page: target };
       }
       App.render();
       if (o.welcome) UI.toast(o.welcome);
@@ -92,6 +96,18 @@
       document.getElementById("appRoot").style.display = "none";
       document.getElementById("authRoot").style.display = "";
       Auth.render();
+    },
+
+    /** Ask the browser to install StudyOS as a home-screen app. */
+    async installApp() {
+      const evt = App._installEvt;
+      if (!evt) {
+        return UI.toast("Install isn't available here — on iPhone: Share → Add to Home Screen");
+      }
+      evt.prompt();
+      try { await evt.userChoice; } catch { /* user dismissed */ }
+      App._installEvt = null;
+      App.render();
     },
 
     applyTheme() {
@@ -553,6 +569,7 @@
             () => { Store.deleteActiveAccount(); App.signOut(); UI.toast("Account deleted"); }, { danger: true, ok: "Delete account" });
         }
         if (e.target.closest("[data-upgrade-guest]")) return App.modalUpgrade();
+        if (e.target.closest("[data-install-app]")) return App.installApp();
 
         // -------- onboarding --------
         if ((v = t("data-ob-next")) !== null) {
@@ -1192,6 +1209,18 @@
     window.addEventListener("pagehide", () => DB.flush());
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") DB.flush();
+    });
+    // Catch the install prompt (Android / desktop Chrome) so the Settings
+    // page can turn it into a real "Install on your phone" button.
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      App._installEvt = e;
+      if (App.route.page === "settings") App.render();
+    });
+    window.addEventListener("appinstalled", () => {
+      App._installEvt = null;
+      UI.toast("StudyOS installed 🎉");
+      if (App.route.page === "settings") App.render();
     });
   });
 })(window);

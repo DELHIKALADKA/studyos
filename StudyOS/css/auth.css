@@ -5,6 +5,7 @@
 
 .auth-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-columns: minmax(0, 440px) minmax(0, 380px);
   gap: 48px;
