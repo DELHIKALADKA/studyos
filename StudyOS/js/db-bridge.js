@@ -311,9 +311,9 @@
         `INSERT INTO tasks (id, account_id, subject_id, title, due_date, priority,
                             status, completed_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [h.id, accountId, byName[h.subject] || null, h.task || "Task", h.due || null,
+        [h.id, accountId, byName[h.subject] || null, h.task || h.title || "Task", h.due || h.dueISO || null,
          (h.priority || "medium").toLowerCase(), done ? "done" : "pending",
-         done ? nowISO() : null, iso(h.createdAt), nowISO()]
+         done ? nowISO() : null, iso(h.createdAt || h.createdAt), nowISO()]
       );
     });
   }
@@ -325,13 +325,13 @@
         `INSERT INTO exams (id, account_id, subject_id, title, exam_date, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [e.id, accountId, byName[e.subject] || null,
-         (e.subject || "Exam") + " test", e.date, nowISO(), nowISO()]
+         e.title || (e.subject || "Exam") + " test", e.date || e.dateISO, nowISO(), nowISO()]
       );
       (e.syllabus || []).forEach((x, i) => {
         DB.run(
           `INSERT INTO exam_syllabus (id, exam_id, topic, done, sort_order)
            VALUES (?, ?, ?, ?, ?)`,
-          [e.id + "_" + i, e.id, x.topic || "Topic", x.done ? 1 : 0, i]
+          [e.id + "_" + i, e.id, x.topic || x.name || "Topic", x.done ? 1 : 0, i]
         );
       });
     });

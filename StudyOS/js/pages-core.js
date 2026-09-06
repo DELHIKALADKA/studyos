@@ -100,9 +100,10 @@
         <div class="card-hd"><h3>🧪 Upcoming tests</h3><button class="btn sm" data-nav="exams">View all</button></div>
         ${exams.length ? exams.slice(0, 3).map((e) => {
           const d = U.daysBetween(U.todayISO(), e.date);
-          const left = e.syllabus.filter((x) => !x.done).length;
+          const syl = e.syllabus || [];
+          const left = syl.filter((x) => !x.done).length;
           return `<div class="item clickable" data-nav="exams">
-            <div class="grow"><div class="t">${U.esc(e.subject)}</div>
+            <div class="grow"><div class="t">${U.esc(e.title || e.subject)}</div>
               <div class="s">${U.fmtDate(e.date)} · ${left ? `${left} topic${left !== 1 ? "s" : ""} left` : "syllabus covered"}</div></div>
             <span class="pill ${d <= 3 ? "red" : d <= 7 ? "yellow" : "brand"}">${d}d</span>
           </div>`;
@@ -338,8 +339,8 @@
   // ============================================================
   P.exams = function () {
     const s = Store.state;
-    const list = s.exams.slice().sort((a, b) => a.date.localeCompare(b.date));
-    const upcoming = list.filter((e) => U.daysBetween(U.todayISO(), e.date) >= 0);
+    const list = s.exams.slice().sort((a, b) => String(a.date || "9999-12-31").localeCompare(String(b.date || "9999-12-31")));
+    const upcoming = list.filter((e) => e.date && U.daysBetween(U.todayISO(), e.date) >= 0);
 
     return `
     <div class="page-head">
@@ -352,35 +353,36 @@
         "Add an exam with its syllabus. StudyOS counts down, tracks what's covered, and can build a prep plan.",
         `<button class="btn primary" data-add-exam>+ Add exam</button>`)
       : list.map((e) => {
-        const d = U.daysBetween(U.todayISO(), e.date);
-        const doneN = e.syllabus.filter((x) => x.done).length;
-        const pct = U.pct(doneN, e.syllabus.length);
+        const d = e.date ? U.daysBetween(U.todayISO(), e.date) : 999;
+        const syl = e.syllabus || [];
+        const doneN = syl.filter((x) => x.done).length;
+        const pct = U.pct(doneN, syl.length);
         const past = d < 0;
         return `<div class="card mb16" style="${past ? "opacity:.6" : ""}">
           <div class="card-hd">
-            <h3>🧪 ${U.esc(e.subject)}</h3>
+            <h3>🧪 ${U.esc(e.title || e.subject)}</h3>
             <div class="flex gap8 center">
               <span class="pill ${past ? "grey" : d <= 3 ? "red" : d <= 7 ? "yellow" : "brand"}">
                 ${past ? "past" : d === 0 ? "today!" : `${d} day${d !== 1 ? "s" : ""} left`}</span>
-              <button class="icon-btn" data-add-syllabus="${e.id}" title="Add topic">➕</button>
+              <button class="icon-btn" data-edit-exam="${e.id}" title="Edit">✏️</button>
               <button class="icon-btn" data-del-exam="${e.id}">🗑️</button>
             </div>
           </div>
-          <div class="muted f13 mb12">📅 ${U.fmtDateLong(e.date)} · syllabus ${pct}% covered</div>
+          <div class="muted f13 mb12">${U.esc(e.subject || "General")} · 📅 ${U.fmtDateLong(e.date)} · syllabus ${pct}% covered</div>
           ${UI.bar(pct, { color: pct >= 80 ? "var(--green)" : pct >= 50 ? "var(--yellow)" : "var(--red)" })}
           <div class="mt16">
-            ${e.syllabus.length ? e.syllabus.map((t, i) => `
+            ${syl.length ? e.syllabus.map((t, i) => `
               <div class="item" style="padding:8px 11px">
                 <button class="check ${t.done ? "done" : ""}" data-syl-toggle="${e.id}|${i}">${t.done ? "✓" : ""}</button>
-                <div class="grow"><div class="t f13" style="${t.done ? "opacity:.55" : ""}">${U.esc(t.topic)}</div></div>
+                <div class="grow"><div class="t f13" style="${t.done ? "opacity:.55" : ""}">${U.esc(t.topic || t.name)}</div></div>
                 <button class="icon-btn" data-del-syllabus="${e.id}|${i}">✕</button>
               </div>`).join("") : `<p class="faint f13">No syllabus topics added.</p>`}
           </div>
           ${!past && d <= 14 ? `<div class="mt16">${UI.insight(
-            e.syllabus.length && doneN < e.syllabus.length
-              ? `<b>${e.syllabus.length - doneN} topic${e.syllabus.length - doneN !== 1 ? "s" : ""} left in ${d} day${d !== 1 ? "s" : ""}.</b> That's about ${Math.max(1, Math.ceil((e.syllabus.length - doneN) / Math.max(1, d)))} topic per day — very doable if you start today.`
+            syl.length && doneN < syl.length
+              ? `<b>${syl.length - doneN} topic${syl.length - doneN !== 1 ? "s" : ""} left in ${d} day${d !== 1 ? "s" : ""}.</b> That's about ${Math.max(1, Math.ceil((syl.length - doneN) / Math.max(1, d)))} topic per day — very doable if you start today.`
               : `<b>Syllabus is fully covered.</b> Switch from learning to testing: quizzes and flashcards over rereading.`,
-            doneN < e.syllabus.length ? "warn" : "good", doneN < e.syllabus.length ? "📌" : "✅")}
+            doneN < syl.length ? "warn" : "good", doneN < syl.length ? "📌" : "✅")}
             <button class="btn sm mt12" data-exam-plan="${e.id}">✨ Build prep plan</button></div>` : ""}
         </div>`;
       }).join("")}`;

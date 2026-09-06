@@ -37,6 +37,19 @@ A comprehensive offline-first study planning and tracking application built for 
 3. Create a study schedule
 4. Begin tracking your progress
 
+## Live Deployment (GitHub Pages)
+
+The app is published to:
+
+**https://DELHIKALADKA.github.io/studyos/**
+
+Deployment is handled by `.github/workflows/pages.yml`:
+
+1. Go to **Settings → Pages** in this repo and set **Source → GitHub Actions**.
+   - ⚠️ GitHub Pages for **private** repos requires GitHub Pro (or make the repo public).
+2. Push to `main` (or press **Run workflow** in the Actions tab) — the `StudyOS/` folder is deployed automatically.
+3. After the first deploy, open the site on your phone and use **Settings → Install on your phone** to add it to the home screen. It then runs full-screen and offline.
+
 ## Project Structure
 ```
 StudyOS/

@@ -285,8 +285,8 @@
     upcomingExams() {
       const t = U.todayISO();
       return this.state.exams
-        .filter((e) => U.daysBetween(t, e.date) >= 0)
-        .sort((a, b) => a.date.localeCompare(b.date));
+        .filter((e) => e.date && U.daysBetween(t, e.date) >= 0)
+        .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
     },
     planFor(iso) {
       return this.state.plan.filter((p) => p.dateISO === iso).sort((a, b) => (a.start || "").localeCompare(b.start || ""));
@@ -402,7 +402,7 @@
       this.upcomingExams().slice(0, 2).forEach((e) => {
         const d = U.daysBetween(t, e.date);
         if (d <= 7) {
-          const left = e.syllabus.filter((x) => !x.done).length;
+          const left = (e.syllabus || []).filter((x) => !x.done).length;
           out.push({ ic: "🧪", t: `${e.subject} test in ${d} day${d !== 1 ? "s" : ""}`, s: left ? `${left} syllabus topic${left !== 1 ? "s" : ""} still to cover.` : "Syllabus fully covered. Revise and relax.", tone: d <= 3 ? "red" : "yellow", go: "exams" });
         }
       });
